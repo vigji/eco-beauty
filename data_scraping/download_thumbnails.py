@@ -7,8 +7,8 @@ from urllib3.util.retry import Retry
 from tqdm import tqdm
 
 
-results_dir = Path("/Users/vigji/Desktop/queries_results")
-images_dir = Path("/Users/vigji/Desktop/queries_results/thumbnails")
+results_dir = Path("/Users/vigji/My Drive/eco-beauty/queries_results")
+images_dir = results_dir / "thumbnails"
 images_dir.mkdir(parents=True, exist_ok=True)
 
 all_results_files = sorted(results_dir.glob("results_*.json"))
@@ -21,12 +21,19 @@ assert len(all_results_files) < 654
 for results_file in tqdm(list(all_results_files)):
     with open(results_file, "r") as f:
         results = json.load(f)
-
+    if not results:
+        print(f"No results in {results_file}")
+        continue
     if "lens_results" in results:
         results = results["lens_results"]
-    else:
+    elif "visual_matches" in results:
         results = results["visual_matches"]
+    else:
+        print(f"No lens_results or visual_matches in {results_file}")
     
+    if not isinstance(results, list):
+        print(f"Results is not a list in {results_file}")
+        continue
     # Keep track of number of failed downloads for each file, over total number of results:
     num_failed_downloads = 0
     for i, result in enumerate(results):
@@ -57,10 +64,8 @@ for results_file in tqdm(list(all_results_files)):
 
 
 # %%
-[len(list((images_dir).glob(f"{results_file.stem}_*.png"))) for results_file in all_results_files[:3]]
+results["search_information"][""]
 # %%
-l = [((images_dir / f.stem)) for f in all_results_files[:3]]# %%
+result
 
-# %%
-list(l[0].glob("*"))    
 # %%

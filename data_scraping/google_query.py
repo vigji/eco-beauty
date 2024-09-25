@@ -6,12 +6,12 @@ import requests
 
 
 # video_results = results["video_results"]
-results_dir = Path("/Users/vigji/Desktop/queries_results")
+results_dir = Path("/Users/vigji/My Drive/eco-beauty/queries_results")
 results_list = []
 
 serp = "scrapingdog"  #  "serpapi", "scrapingdog"
 api_file_dict = {"serpapi": "key_serpapi.txt", 
-                 "scrapingdog": "key_scrapingdog3.txt"}
+                 "scrapingdog": "key_scrapingdog6.txt"}
 
 with open(results_dir / api_file_dict[serp], "r") as f:
     api_key = f.read().strip()
@@ -19,7 +19,7 @@ with open(results_dir / api_file_dict[serp], "r") as f:
 
 labels = ["beautiful"]  # "ugly"
 for label in labels:
-    for i in range(700):
+    for i in range(627):
         results_file = results_dir / f"results_{label}_{i:03d}.json"
 
         if results_file.exists():
