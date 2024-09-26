@@ -87,6 +87,13 @@ composite_image = Image.new("RGB", (256 * num_columns, 256 * num_rows))
 thumbnails_with_scores = []
 for i, thumbnail in enumerate(focal_thumbnails):
     thumbnail_copy = thumbnail.copy()
+    # apply the same transformation as the one used for feature extraction
+    thumbnail_copy = transform(thumbnail_copy)
+    # convert to PIL image, making sure that image is mapped to 0-255 values:
+    thumbnail_copy = transforms.ToPILImage()(thumbnail_copy.squeeze(0).clamp(0, 1))
+    # thumbnail_copy = thumbnail_copy.resize((256, 256))  # Resize to match original dimensions
+    
+    
     draw = ImageDraw.Draw(thumbnail_copy)
     draw.text((10, 10), f"{similarities[i]:.4f}", fill="red")
     thumbnails_with_scores.append(thumbnail_copy)
