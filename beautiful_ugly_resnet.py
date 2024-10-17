@@ -13,7 +13,7 @@ prepare_data = False
 split_ratio = 0.2
 data_dir = Path("/Users/vigji/My Drive/eco-beauty/dataset/resnet_balanced")
 device = "mps"
-categories = ['beautiful', 'ugly']
+categories = ["beautiful", "ugly"]
 
 # split the data into training and validation sets folders:
 
@@ -38,27 +38,35 @@ if prepare_data:
 # %%
 # Data augmentation and normalization for training, normalization for validation
 data_transforms = {
-    'train': transforms.Compose([
-        transforms.RandomResizedCrop(224),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-    ]),
-    'val': transforms.Compose([
-        transforms.Resize(256),
-        transforms.CenterCrop(224),
-        transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-    ]),
+    "train": transforms.Compose(
+        [
+            transforms.RandomResizedCrop(224),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ]
+    ),
+    "val": transforms.Compose(
+        [
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ]
+    ),
 }
 
-image_datasets = {x: datasets.ImageFolder(f'{data_dir}/{x}', data_transforms[x])
-                  for x in ['train', 'val']}
-dataloaders = {x: DataLoader(image_datasets[x], batch_size=32, shuffle=True)
-               for x in ['train', 'val']}
+image_datasets = {
+    x: datasets.ImageFolder(f"{data_dir}/{x}", data_transforms[x])
+    for x in ["train", "val"]
+}
+dataloaders = {
+    x: DataLoader(image_datasets[x], batch_size=32, shuffle=True)
+    for x in ["train", "val"]
+}
 
-dataset_sizes = {x: len(image_datasets[x]) for x in ['train', 'val']}
-class_names = image_datasets['train'].classes
+dataset_sizes = {x: len(image_datasets[x]) for x in ["train", "val"]}
+class_names = image_datasets["train"].classes
 device = torch.device(device)
 
 # %%
@@ -76,17 +84,18 @@ model = model.to(device)
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 
+
 # %%
 def train_model(model, criterion, optimizer, num_epochs=100):
     for epoch in range(num_epochs):
-        print(f'Epoch {epoch+1}/{num_epochs}')
+        print(f"Epoch {epoch+1}/{num_epochs}")
 
         # Each epoch has a training and validation phase
-        for phase in ['train', 'val']:
-            if phase == 'train':
+        for phase in ["train", "val"]:
+            if phase == "train":
                 model.train()  # Set model to training mode
             else:
-                model.eval()   # Set model to evaluate mode
+                model.eval()  # Set model to evaluate mode
 
             running_loss = 0.0
             running_corrects = 0
@@ -100,13 +109,13 @@ def train_model(model, criterion, optimizer, num_epochs=100):
                 optimizer.zero_grad()
 
                 # Forward
-                with torch.set_grad_enabled(phase == 'train'):
+                with torch.set_grad_enabled(phase == "train"):
                     outputs = model(inputs)
                     _, preds = torch.max(outputs, 1)
                     loss = criterion(outputs, labels)
 
                     # Backward + optimize only if in training phase
-                    if phase == 'train':
+                    if phase == "train":
                         loss.backward()
                         optimizer.step()
 
@@ -117,14 +126,14 @@ def train_model(model, criterion, optimizer, num_epochs=100):
             epoch_loss = running_loss / dataset_sizes[phase]
             epoch_acc = running_corrects.float() / dataset_sizes[phase]
 
-            print(f'{phase} Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f}')
+            print(f"{phase} Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f}")
 
     return model
 
 
 # Train the model
-if __name__ == '__main__':
+if __name__ == "__main__":
     model = train_model(model, criterion, optimizer, num_epochs=100)
-    torch.save(model.state_dict(), 'beautiful_vs_ugly_resnet18.pth')
+    torch.save(model.state_dict(), "beautiful_vs_ugly_resnet18.pth")
 
 # %%

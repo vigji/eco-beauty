@@ -4,14 +4,12 @@ import json
 import requests
 
 
-
 # video_results = results["video_results"]
 results_dir = Path("/Users/vigji/My Drive/eco-beauty/queries_results")
 results_list = []
 
 serp = "scrapingdog"  #  "serpapi", "scrapingdog"
-api_file_dict = {"serpapi": "key_serpapi.txt", 
-                 "scrapingdog": "key_scrapingdog6.txt"}
+api_file_dict = {"serpapi": "key_serpapi.txt", "scrapingdog": "key_scrapingdog6.txt"}
 
 with open(results_dir / api_file_dict[serp], "r") as f:
     api_key = f.read().strip()
@@ -27,13 +25,9 @@ for label in labels:
             continue
         # url: i, placed within 3 digits number and trailing zeros:
         img_url = f"https://raw.githubusercontent.com/vigji/temp-eco/refs/heads/main/raw/{label}/img{i:03d}.png"
-        
+
         if serp == "serpapi":
-            params = {
-                "engine": "google_lens",
-                "url": img_url,
-                "api_key": api_key
-            }
+            params = {"engine": "google_lens", "url": img_url, "api_key": api_key}
             print(params)
             search = GoogleSearch(params)
             results = search.get_dict()
@@ -61,8 +55,3 @@ for label in labels:
 
         with open(results_file, "w") as f:
             json.dump(results, f)
-
-
-
-
-    

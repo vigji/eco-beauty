@@ -15,7 +15,9 @@ all_results_files = sorted(results_dir.glob("results_*.json"))
 
 # remove files that have already been downloaded, so there is at least a thumbnail:
 
-all_results_files = [f for f in all_results_files if len(list((images_dir).glob(f"{f.stem}_*.png"))) == 0]
+all_results_files = [
+    f for f in all_results_files if len(list((images_dir).glob(f"{f.stem}_*.png"))) == 0
+]
 
 assert len(all_results_files) < 654
 for results_file in tqdm(list(all_results_files)):
@@ -30,7 +32,7 @@ for results_file in tqdm(list(all_results_files)):
         results = results["visual_matches"]
     else:
         print(f"No lens_results or visual_matches in {results_file}")
-    
+
     if not isinstance(results, list):
         print(f"Results is not a list in {results_file}")
         continue
@@ -43,8 +45,8 @@ for results_file in tqdm(list(all_results_files)):
             with requests.Session() as session:
                 retry = Retry(connect=10, backoff_factor=0.5)
                 adapter = HTTPAdapter(max_retries=retry)
-                session.mount('http://', adapter)
-                session.mount('https://', adapter)
+                session.mount("http://", adapter)
+                session.mount("https://", adapter)
                 thumbnail_response = session.get(thumbnail_url)
 
         except ConnectionError:
