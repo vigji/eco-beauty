@@ -61,7 +61,9 @@ def setup_image_processing():
     tuple
         Contains the feature extractor, transform, and transform_visualization.
     """
-    resnet = models.resnet50(pretrained=True)
+    resnet = models.resnet50(
+        weights=models.ResNet50_Weights.IMAGENET1K_V1
+    )  # or DEFAULT
     resnet.eval()
     layers_to_keep = list(resnet.children())[:-1]
     feature_extractor = torch.nn.Sequential(*layers_to_keep)
@@ -210,8 +212,9 @@ def process_focal_image(
     annotations = load_annotations(
         base_dir / "google_lens_search/annotations", focal_image_id
     )
+    # print(annotations)
 
-    if annotations is None:
+    if annotations is None or len(annotations) == 0:
         print(f"No annotations found for {focal_image_id}")
         return None
 
