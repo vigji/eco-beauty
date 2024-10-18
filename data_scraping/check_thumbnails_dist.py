@@ -29,126 +29,241 @@ def load_thumbnails(category, img_number):
     return [Image.open(file_path) for file_path in file_paths]
 
 
-focal_image_id = "beautiful_000"
-category, img_number = focal_image_id.split("_")[0], int(focal_image_id.split("_")[1])
-focal_image = load_image(category, img_number)
-focal_thumbnails = load_thumbnails(category, img_number)
+def load_annotations(annotations_dir, focal_image_id):
+    """
+    Load annotations for a given focal image.
 
-annotations = json.load(open(annotations_dir / f"{focal_image_id}_annotations.json"))
-annotations
-# %%
-# Implement image similarity computation
-# Load pre-trained ResNet model
-resnet = models.resnet50(pretrained=True)
-resnet.eval()
+    Parameters
+    ----------
+    annotations_dir : Path
+        Directory containing annotation files.
+    focal_image_id : str
+        ID of the focal image.
 
-# Remove the last fully connected layer
-layers_to_keep = list(resnet.children())[:-1]
-feature_extractor = torch.nn.Sequential(*layers_to_keep)
-
-# To compare properly, we first grayscale and normalize:
-transform = transforms.Compose(
-    [
-        transforms.Resize(256),
-        transforms.CenterCrop(224),
-        transforms.Grayscale(num_output_channels=3),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ]
-)
-transform_visualization = transforms.Compose(
-    [
-        transforms.Resize(256),
-        transforms.CenterCrop(224),
-        # transforms.Grayscale(num_output_channels=3),
-        transforms.ToTensor(),
-        #  transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ]
-)
+    Returns
+    -------
+    dict
+        Annotations for the focal image.
+    """
+    annotation_file = annotations_dir / f"{focal_image_id}_annotations.json"
+    if annotation_file.exists():
+        with open(annotation_file, "r") as f:
+            return json.load(f)
+    return None
 
 
-def extract_features(image):
+def setup_image_processing():
+    """
+    Set up the image processing pipeline.
+
+    Returns
+    -------
+    tuple
+        Contains the feature extractor, transform, and transform_visualization.
+    """
+    resnet = models.resnet50(pretrained=True)
+    resnet.eval()
+    layers_to_keep = list(resnet.children())[:-1]
+    feature_extractor = torch.nn.Sequential(*layers_to_keep)
+
+    transform = transforms.Compose(
+        [
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.Grayscale(num_output_channels=3),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ]
+    )
+
+    transform_visualization = transforms.Compose(
+        [
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+        ]
+    )
+
+    return feature_extractor, transform, transform_visualization
+
+
+def extract_features(image, feature_extractor, transform):
+    """
+    Extract features from an image.
+
+    Parameters
+    ----------
+    image : PIL.Image
+        Input image.
+    feature_extractor : torch.nn.Module
+        Feature extraction model.
+    transform : torchvision.transforms.Compose
+        Image transformation pipeline.
+
+    Returns
+    -------
+    torch.Tensor
+        Extracted features.
+    """
     img_tensor = transform(image).unsqueeze(0)
     with torch.no_grad():
         features = feature_extractor(img_tensor)
     return features.squeeze()
 
 
-# %%
-# Extract features from focal image
-focal_features = extract_features(focal_image)
+def create_composite_image(
+    focal_image, focal_thumbnails, similarities, annotations, transform_visualization
+):
+    """
+    Create a composite image of thumbnails with similarity scores.
 
-# %%
-# Extract features from thumbnails and compute similarities
-similarities = []
-for thumbnail in focal_thumbnails:
-    thumbnail_features = extract_features(thumbnail)
-    similarity = cosine_similarity(
-        focal_features.unsqueeze(0), thumbnail_features.unsqueeze(0)
-    )
-    similarities.append(similarity.item())
+    Parameters
+    ----------
+    focal_image : PIL.Image
+        The focal image.
+    focal_thumbnails : list
+        List of thumbnail images.
+    similarities : list
+        List of similarity scores.
+    annotations : dict
+        Annotations for the thumbnails.
+    transform_visualization : torchvision.transforms.Compose
+        Image transformation pipeline for visualization.
 
+    Returns
+    -------
+    PIL.Image
+        Composite image of thumbnails with similarity scores.
+    """
+    num_columns = 10
+    num_rows = (len(focal_thumbnails) + num_columns - 1) // num_columns
+    composite_image = Image.new("RGB", (256 * num_columns, 256 * num_rows))
 
-# Make a composite image with the thumbnails, sorted by similarity to the focal image
-# in a multiple columns format, so that the output is almost square.
-# For each, overlay the similarity score as text on top of the thumbnail.
-# Make sure thumbnails are sorted by similarity to the focal image.
-# %%
+    thumbnails_with_scores = []
+    for i, (thumbnail, label) in enumerate(zip(focal_thumbnails, annotations.values())):
+        thumbnail_copy = thumbnail.copy()
+        thumbnail_copy = transform_visualization(thumbnail_copy)
+        thumbnail_copy = transforms.ToPILImage()(thumbnail_copy.squeeze(0).clamp(0, 1))
 
-# Create a composite image, with 10 columns and as many rows as needed
-num_columns = 10
-num_rows = (len(focal_thumbnails) + num_columns - 1) // num_columns
-composite_image = Image.new("RGB", (256 * num_columns, 256 * num_rows))
-
-# %%
-# Create copies of thumbnails with similarity scores overlaid
-thumbnails_with_scores = []
-for i, (thumbnail, label) in enumerate(zip(focal_thumbnails, annotations.values())):
-    thumbnail_copy = thumbnail.copy()
-    # apply the same transformation as the one used for feature extraction
-    thumbnail_copy = transform_visualization(thumbnail_copy)
-    # convert to PIL image, making sure that image is mapped to 0-255 values:
-    thumbnail_copy = transforms.ToPILImage()(thumbnail_copy.squeeze(0).clamp(0, 1))
-
-    # Add green frame
-    color = "green" if label == "same" else "red"
-    framed_thumbnail = Image.new("RGB", thumbnail_copy.size, color=color)
-    width_pxs = 4
-    # Crop thumbnail_copy to fit within the frame
-    cropped_thumbnail = thumbnail_copy.crop(
-        (
-            0,
-            0,
-            framed_thumbnail.width - 2 * width_pxs,
-            framed_thumbnail.height - 2 * width_pxs,
+        color = "green" if label == "same" else "red"
+        framed_thumbnail = Image.new("RGB", thumbnail_copy.size, color=color)
+        width_pxs = 4
+        cropped_thumbnail = thumbnail_copy.crop(
+            (
+                0,
+                0,
+                framed_thumbnail.width - 2 * width_pxs,
+                framed_thumbnail.height - 2 * width_pxs,
+            )
         )
+        framed_thumbnail.paste(cropped_thumbnail, (width_pxs, width_pxs))
+
+        draw = ImageDraw.Draw(framed_thumbnail)
+        draw.text((10, 10), f"{similarities[i]:.4f}", fill="red")
+        thumbnails_with_scores.append(framed_thumbnail)
+
+    sorted_thumbnails_with_scores = [
+        x
+        for _, x in sorted(
+            zip(similarities, thumbnails_with_scores),
+            key=lambda pair: pair[0],
+            reverse=True,
+        )
+    ]
+
+    for i, thumbnail in enumerate(sorted_thumbnails_with_scores):
+        row, col = divmod(i, num_columns)
+        composite_image.paste(thumbnail, (col * 256, row * 256))
+
+    return composite_image
+
+
+def process_focal_image(
+    focal_image_id, base_dir, feature_extractor, transform, transform_visualization
+):
+    """
+    Process a single focal image and its thumbnails.
+
+    Parameters
+    ----------
+    focal_image_id : str
+        ID of the focal image.
+    base_dir : Path
+        Base directory for the project.
+    feature_extractor : torch.nn.Module
+        Feature extraction model.
+    transform : torchvision.transforms.Compose
+        Image transformation pipeline.
+    transform_visualization : torchvision.transforms.Compose
+        Image transformation pipeline for visualization.
+
+    Returns
+    -------
+    PIL.Image
+        Composite image of thumbnails with similarity scores.
+    """
+    category, img_number = focal_image_id.split("_")[0], int(
+        focal_image_id.split("_")[1]
     )
-    framed_thumbnail.paste(cropped_thumbnail, (width_pxs, width_pxs))
-
-    draw = ImageDraw.Draw(framed_thumbnail)
-    draw.text((10, 10), f"{similarities[i]:.4f}", fill="red")
-    thumbnails_with_scores.append(framed_thumbnail)
-
-# Sort thumbnails by similarity
-sorted_thumbnails_with_scores = [
-    x
-    for _, x in sorted(
-        zip(similarities, thumbnails_with_scores),
-        key=lambda pair: pair[0],
-        reverse=True,
+    focal_image = load_image(category, img_number)
+    focal_thumbnails = load_thumbnails(category, img_number)
+    annotations = load_annotations(
+        base_dir / "google_lens_search/annotations", focal_image_id
     )
-]
 
-# Paste thumbnails with scores into the composite image
-for i, thumbnail in enumerate(sorted_thumbnails_with_scores):
-    row = i // num_columns
-    col = i % num_columns
-    composite_image.paste(thumbnail, (col * 256, row * 256))
+    if annotations is None:
+        print(f"No annotations found for {focal_image_id}")
+        return None
 
-# Save the composite image
-composite_dir = base_dir / "google_lens_search/composite_images"
-composite_dir.mkdir(parents=True, exist_ok=True)
-composite_image.save(composite_dir / f"{focal_image_id}_composite.png")
+    focal_features = extract_features(focal_image, feature_extractor, transform)
+
+    similarities = []
+    for thumbnail in focal_thumbnails:
+        thumbnail_features = extract_features(thumbnail, feature_extractor, transform)
+        similarity = cosine_similarity(
+            focal_features.unsqueeze(0), thumbnail_features.unsqueeze(0)
+        )
+        similarities.append(similarity.item())
+
+    composite_image = create_composite_image(
+        focal_image,
+        focal_thumbnails,
+        similarities,
+        annotations,
+        transform_visualization,
+    )
+    return composite_image
+
+
+def main():
+    base_dir = Path("/Users/vigji/My Drive/eco-beauty")
+    annotations_dir = base_dir / "google_lens_search/annotations"
+    composite_dir = base_dir / "google_lens_search/composite_images"
+    composite_dir.mkdir(parents=True, exist_ok=True)
+
+    feature_extractor, transform, transform_visualization = setup_image_processing()
+
+    # Find all available annotation files
+    annotation_files = list(annotations_dir.glob("*_annotations.json"))
+    focal_image_ids = [
+        file.stem.replace("_annotations", "") for file in annotation_files
+    ]
+
+    for focal_image_id in focal_image_ids:
+        composite_image = process_focal_image(
+            focal_image_id,
+            base_dir,
+            feature_extractor,
+            transform,
+            transform_visualization,
+        )
+        if composite_image:
+            composite_image.save(composite_dir / f"{focal_image_id}_composite.png")
+            print(f"Processed and saved composite image for {focal_image_id}")
+
+
+if __name__ == "__main__":
+    main()
 
 
 # %%
