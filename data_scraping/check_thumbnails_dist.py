@@ -8,6 +8,7 @@ import numpy as np
 import torchvision.models as models
 import torchvision.transforms as transforms
 from torch.nn.functional import cosine_similarity
+from tqdm import tqdm
 
 
 # Define paths
@@ -26,24 +27,12 @@ def load_image(category, img_number):
 
 def load_thumbnails(category, img_number):
     file_paths = list(thumbnails_dir.glob(f"results_{category}_{img_number:03}_*.png"))
-    return [Image.open(file_path) for file_path in file_paths]
+    return [Image.open(file_path) for file_path in sorted(file_paths)]
 
 
 def load_annotations(annotations_dir, focal_image_id):
     """
     Load annotations for a given focal image.
-
-    Parameters
-    ----------
-    annotations_dir : Path
-        Directory containing annotation files.
-    focal_image_id : str
-        ID of the focal image.
-
-    Returns
-    -------
-    dict
-        Annotations for the focal image.
     """
     annotation_file = annotations_dir / f"{focal_image_id}_annotations.json"
     if annotation_file.exists():
@@ -55,11 +44,6 @@ def load_annotations(annotations_dir, focal_image_id):
 def setup_image_processing():
     """
     Set up the image processing pipeline.
-
-    Returns
-    -------
-    tuple
-        Contains the feature extractor, transform, and transform_visualization.
     """
     resnet = models.resnet50(
         weights=models.ResNet50_Weights.IMAGENET1K_V1
@@ -92,20 +76,6 @@ def setup_image_processing():
 def extract_features(image, feature_extractor, transform):
     """
     Extract features from an image.
-
-    Parameters
-    ----------
-    image : PIL.Image
-        Input image.
-    feature_extractor : torch.nn.Module
-        Feature extraction model.
-    transform : torchvision.transforms.Compose
-        Image transformation pipeline.
-
-    Returns
-    -------
-    torch.Tensor
-        Extracted features.
     """
     img_tensor = transform(image).unsqueeze(0)
     with torch.no_grad():
@@ -118,24 +88,6 @@ def create_composite_image(
 ):
     """
     Create a composite image of thumbnails with similarity scores.
-
-    Parameters
-    ----------
-    focal_image : PIL.Image
-        The focal image.
-    focal_thumbnails : list
-        List of thumbnail images.
-    similarities : list
-        List of similarity scores.
-    annotations : dict
-        Annotations for the thumbnails.
-    transform_visualization : torchvision.transforms.Compose
-        Image transformation pipeline for visualization.
-
-    Returns
-    -------
-    PIL.Image
-        Composite image of thumbnails with similarity scores.
     """
     num_columns = 10
     num_rows = (len(focal_thumbnails) + num_columns - 1) // num_columns
@@ -185,24 +137,6 @@ def process_focal_image(
 ):
     """
     Process a single focal image and its thumbnails.
-
-    Parameters
-    ----------
-    focal_image_id : str
-        ID of the focal image.
-    base_dir : Path
-        Base directory for the project.
-    feature_extractor : torch.nn.Module
-        Feature extraction model.
-    transform : torchvision.transforms.Compose
-        Image transformation pipeline.
-    transform_visualization : torchvision.transforms.Compose
-        Image transformation pipeline for visualization.
-
-    Returns
-    -------
-    PIL.Image
-        Composite image of thumbnails with similarity scores.
     """
     category, img_number = focal_image_id.split("_")[0], int(
         focal_image_id.split("_")[1]
@@ -238,7 +172,7 @@ def process_focal_image(
     return composite_image
 
 
-def main():
+def process_all_images():
     base_dir = Path("/Users/vigji/My Drive/eco-beauty")
     annotations_dir = base_dir / "google_lens_search/annotations"
     composite_dir = base_dir / "google_lens_search/composite_images"
@@ -265,8 +199,196 @@ def main():
             print(f"Processed and saved composite image for {focal_image_id}")
 
 
-if __name__ == "__main__":
-    main()
+# if __name__ == "__main__":
+#     main()
+
+import pandas as pd
+
+def create_similarity_dataframe(base_dir, feature_extractor, transform):
+    """
+    Create a dataframe with similarity scores and true labels for all annotations.
+    """
+    annotations_dir = base_dir / "google_lens_search/annotations"
+    annotation_files = list(annotations_dir.glob("*_annotations.json"))
+    
+    feature_extractor, transform, _ = setup_image_processing()
+    
+    data = []
+    for annotation_file in tqdm(annotation_files):
+        focal_image_id = annotation_file.stem.replace("_annotations", "")
+        annotations = load_annotations(annotations_dir, focal_image_id)
+        if annotations is None or len(annotations) == 0:
+            continue
+        
+        category, img_number = focal_image_id.split("_")[0], int(
+            focal_image_id.split("_")[1]
+        )
+        focal_image = load_image(category, img_number)
+        focal_thumbnails = load_thumbnails(category, img_number)
+        if focal_image is None or not focal_thumbnails:
+            continue
+        
+        focal_features = extract_features(focal_image, feature_extractor, transform)
+        
+        for thumbnail, (thumb_id, label) in zip(focal_thumbnails, annotations.items()):
+            thumbnail_features = extract_features(thumbnail, feature_extractor, transform)
+            similarity = cosine_similarity(
+                focal_features.unsqueeze(0), thumbnail_features.unsqueeze(0)
+            ).item()
+            # print(label)
+            data.append({
+                "focal_image_id": focal_image_id,
+                "similarity": similarity,
+                "true_label": label,  #annotation["label"],
+                "thumbnail_id": thumb_id,
+                # "thumbnail_url": annotation["thumbnail_url"]
+            })
+    
+    return pd.DataFrame(data)
+
+import torch
+
+def create_similarity_dataframe_gpu(base_dir, feature_extractor, transform):
+    """
+    Create a dataframe with similarity scores and true labels for all annotations using GPU acceleration.
+
+    Parameters
+    ----------
+    base_dir : pathlib.Path
+        The base directory containing the dataset and annotations.
+    feature_extractor : torch.nn.Module
+        The feature extractor model.
+    transform : torchvision.transforms.Compose
+        The transformation pipeline for the images.
+
+    Returns
+    -------
+    pandas.DataFrame
+        A dataframe containing focal image IDs, similarity scores, true labels, and thumbnail IDs.
+    """
+    annotations_dir = base_dir / "google_lens_search/annotations"
+    annotation_files = list(annotations_dir.glob("*_annotations.json"))
+    
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    feature_extractor.to(device)
+    feature_extractor.eval()
+    
+    data = []
+    for annotation_file in tqdm(annotation_files):
+        focal_image_id = annotation_file.stem.replace("_annotations", "")
+        annotations = load_annotations(annotations_dir, focal_image_id)
+        if annotations is None or len(annotations) == 0:
+            continue
+        
+        category, img_number = focal_image_id.split("_")[0], int(focal_image_id.split("_")[1])
+        focal_image = load_image(category, img_number)
+        focal_thumbnails = load_thumbnails(category, img_number)
+        if focal_image is None or not focal_thumbnails:
+            continue
+        
+        focal_tensor = transform(focal_image).unsqueeze(0).to(device)
+        with torch.no_grad():
+            focal_features = feature_extractor(focal_tensor).squeeze(0)
+        
+        thumbnail_tensors = torch.stack([transform(thumbnail) for thumbnail in focal_thumbnails]).to(device)
+        with torch.no_grad():
+            thumbnail_features = feature_extractor(thumbnail_tensors)
+        
+        similarities = cosine_similarity(focal_features.unsqueeze(0), thumbnail_features)
+        similarities = similarities.cpu().numpy().flatten()
+        
+        for (thumb_id, label), similarity in zip(annotations.items(), similarities):
+            data.append({
+                "focal_image_id": focal_image_id,
+                "similarity": similarity,
+                "true_label": label,
+                "thumbnail_id": thumb_id,
+            })
+    
+    return pd.DataFrame(data)
 
 
+# %%
+base_dir = Path("/Users/vigji/My Drive/eco-beauty")
+feature_extractor, transform, _ = setup_image_processing()
+
+df = create_similarity_dataframe_gpu(base_dir, feature_extractor, transform)
+df['true_label_int'] = df['true_label'].apply(lambda x: 1 if x == "same" else 0)
+# Save the dataframe to a CSV file
+output_dir = base_dir / "google_lens_search/analysis"
+output_dir.mkdir(parents=True, exist_ok=True)
+df.to_csv(output_dir / "similarity_scores.csv", index=False)
+print(f"Saved similarity scores to {output_dir / 'similarity_scores.csv'}")
+
+# %%
+import seaborn as sns
+import matplotlib.pyplot as plt
+from sklearn.metrics import accuracy_score
+df['true_label_int'] = df['true_label'].apply(lambda x: 1 if x == "same" else 0)
+
+def find_best_threshold(df, min_accuracy=0.9):
+    """
+    Find the best threshold for separating 'same' and 'different' distributions.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        DataFrame containing 'similarity' and 'true_label' columns.
+    min_accuracy : float, optional
+        Minimum accuracy to achieve, by default 0.9.
+
+    Returns
+    -------
+    float
+        Best threshold value.
+    float
+        Accuracy achieved with the best threshold.
+    """
+    thresholds = np.arange(0, 1.01, 0.01)
+    predicted = (df['similarity'].values[:, np.newaxis] >= thresholds).astype(int)
+    # predicted = predicted.apply(lambda x: "same" if x == 1 else "different", axis=1)
+
+    accuracies = np.apply_along_axis(accuracy_score, 0, df['true_label_int'].values[:, np.newaxis], predicted)
+    
+    valid_thresholds = accuracies >= min_accuracy
+    if np.any(valid_thresholds):
+        best_index = np.argmax(accuracies * valid_thresholds)
+        best_threshold = thresholds[best_index]
+        best_accuracy = accuracies[best_index]
+    else:
+        best_threshold = 0
+        best_accuracy = 0
+
+    return best_threshold, best_accuracy
+
+
+# Create the plot
+plt.figure(figsize=(12, 6))
+
+# Subplot for 'same' distribution
+plt.subplot(1, 2, 1)
+sns.swarmplot(data=df, x='true_label', y='similarity', color='blue')
+plt.title("'Same' Distribution")
+plt.xlabel("True Label (1 = Same)")
+plt.ylabel("Similarity Score")
+
+
+plt.tight_layout()
+
+# Find best threshold
+#best_threshold, best_accuracy = find_best_threshold(df)
+
+#print(f"Best threshold: {best_threshold:.2f}")
+#print(f"Accuracy achieved: {best_accuracy:.2%}")
+
+# Add threshold line to both subplots
+for i in range(1, 3):
+    plt.subplot(1, 2, i)
+    #plt.axhline(y=best_threshold, color='green', linestyle='--', label=f'Threshold ({best_threshold:.2f})')
+    plt.legend()
+
+plt.show()
+
+# %%
+df
 # %%
