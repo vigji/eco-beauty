@@ -93,6 +93,74 @@ def load_focal_image_data(base_dir, category_id, img_number_id):
 load_focal_image_data(base_dir, "beautiful", 25)
 # %%
 
+# TODO working here
+def create_similarity_dataframe_gpu(base_dir, feature_extractor, transform):
+    """
+    Create a dataframe with similarity scores and true labels for all annotations using GPU acceleration.
+
+    Parameters
+    ----------
+    base_dir : pathlib.Path
+        The base directory containing the dataset and annotations.
+    feature_extractor : torch.nn.Module
+        The feature extractor model.
+    transform : torchvision.transforms.Compose
+        The transformation pipeline for the images.
+
+    Returns
+    -------
+    pandas.DataFrame
+        A dataframe containing focal image IDs, similarity scores, true labels, and thumbnail IDs.
+    """
+    annotations_dir = base_dir / "google_lens_search/annotations"
+    annotation_files = list(annotations_dir.glob("*_annotations.json"))
+
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    feature_extractor.to(device)
+    feature_extractor.eval()
+
+    data = []
+    for annotation_file in tqdm(annotation_files):
+        focal_image_id = annotation_file.stem.replace("_annotations", "")
+        annotations = load_annotations(annotations_dir, focal_image_id)
+        if annotations is None or len(annotations) == 0:
+            continue
+
+        category, img_number = focal_image_id.split("_")[0], int(
+            focal_image_id.split("_")[1]
+        )
+        focal_image = load_image(category, img_number)
+        focal_thumbnails = load_thumbnails(category, img_number)
+        if focal_image is None or not focal_thumbnails:
+            continue
+
+        focal_tensor = transform(focal_image).unsqueeze(0).to(device)
+        with torch.no_grad():
+            focal_features = feature_extractor(focal_tensor).squeeze(0)
+
+        thumbnail_tensors = torch.stack(
+            [transform(thumbnail) for thumbnail in focal_thumbnails]
+        ).to(device)
+        with torch.no_grad():
+            thumbnail_features = feature_extractor(thumbnail_tensors)
+
+        similarities = cosine_similarity(
+            focal_features.unsqueeze(0), thumbnail_features
+        )
+        similarities = similarities.cpu().numpy().flatten()
+
+        for (thumb_id, label), similarity in zip(annotations.items(), similarities):
+            data.append(
+                {
+                    "focal_image_id": focal_image_id,
+                    "similarity": similarity,
+                    "true_label": label,
+                    "thumbnail_id": thumb_id,
+                }
+            )
+
+    return pd.DataFrame(data)
+# %%
 
 def setup_image_processing():
     """
@@ -308,72 +376,7 @@ def create_similarity_dataframe(base_dir, feature_extractor, transform):
 import torch
 
 
-def create_similarity_dataframe_gpu(base_dir, feature_extractor, transform):
-    """
-    Create a dataframe with similarity scores and true labels for all annotations using GPU acceleration.
 
-    Parameters
-    ----------
-    base_dir : pathlib.Path
-        The base directory containing the dataset and annotations.
-    feature_extractor : torch.nn.Module
-        The feature extractor model.
-    transform : torchvision.transforms.Compose
-        The transformation pipeline for the images.
-
-    Returns
-    -------
-    pandas.DataFrame
-        A dataframe containing focal image IDs, similarity scores, true labels, and thumbnail IDs.
-    """
-    annotations_dir = base_dir / "google_lens_search/annotations"
-    annotation_files = list(annotations_dir.glob("*_annotations.json"))
-
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-    feature_extractor.to(device)
-    feature_extractor.eval()
-
-    data = []
-    for annotation_file in tqdm(annotation_files):
-        focal_image_id = annotation_file.stem.replace("_annotations", "")
-        annotations = load_annotations(annotations_dir, focal_image_id)
-        if annotations is None or len(annotations) == 0:
-            continue
-
-        category, img_number = focal_image_id.split("_")[0], int(
-            focal_image_id.split("_")[1]
-        )
-        focal_image = load_image(category, img_number)
-        focal_thumbnails = load_thumbnails(category, img_number)
-        if focal_image is None or not focal_thumbnails:
-            continue
-
-        focal_tensor = transform(focal_image).unsqueeze(0).to(device)
-        with torch.no_grad():
-            focal_features = feature_extractor(focal_tensor).squeeze(0)
-
-        thumbnail_tensors = torch.stack(
-            [transform(thumbnail) for thumbnail in focal_thumbnails]
-        ).to(device)
-        with torch.no_grad():
-            thumbnail_features = feature_extractor(thumbnail_tensors)
-
-        similarities = cosine_similarity(
-            focal_features.unsqueeze(0), thumbnail_features
-        )
-        similarities = similarities.cpu().numpy().flatten()
-
-        for (thumb_id, label), similarity in zip(annotations.items(), similarities):
-            data.append(
-                {
-                    "focal_image_id": focal_image_id,
-                    "similarity": similarity,
-                    "true_label": label,
-                    "thumbnail_id": thumb_id,
-                }
-            )
-
-    return pd.DataFrame(data)
 
 
 process_all_images()
