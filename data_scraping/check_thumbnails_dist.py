@@ -90,7 +90,73 @@ def load_focal_image_data(base_dir, category_id, img_number_id):
     return FocalImageData(image, thumbnails, category_id, img_number_id)
 
 
-load_focal_image_data(base_dir, "beautiful", 25)
+image = load_focal_image_data(base_dir, "beautiful", 25)
+# %%
+
+def setup_image_processing():
+    """
+    Set up the image processing pipeline.
+    """
+    resnet = models.resnet50(
+        weights=models.ResNet50_Weights.IMAGENET1K_V1
+    )  # or DEFAULT
+    resnet.eval()
+    layers_to_keep = list(resnet.children())[:-1]
+    feature_extractor = torch.nn.Sequential(*layers_to_keep)
+
+    transform = transforms.Compose(
+        [
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.Grayscale(num_output_channels=3),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ]
+    )
+
+    transform_visualization = transforms.Compose(
+        [
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+        ]
+    )
+
+    return feature_extractor, transform, transform_visualization
+
+
+def compute_similarity_score(image_data: FocalImageData, feature_extractor, transform):
+    
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    feature_extractor.to(device)
+    feature_extractor.eval()
+
+    focal_tensor = transform(image_data.image).unsqueeze(0).to(device)
+    with torch.no_grad():
+        focal_features = feature_extractor(focal_tensor).squeeze(0)
+
+    thumbnail_tensors = torch.stack(
+        [transform(thumbnail.image) for thumbnail in image_data.thumbnails]
+    ).to(device)
+
+    with torch.no_grad():
+        thumbnail_features = feature_extractor(thumbnail_tensors)
+
+    similarities = cosine_similarity(
+        focal_features.unsqueeze(0), thumbnail_features
+    )
+    similarities = similarities.cpu().numpy().flatten()
+
+    for thumbnail, similarity in zip(image_data.thumbnails, similarities):
+        thumbnail.score = similarity
+    return similarities
+
+
+feature_extractor, transform, transform_visualization = setup_image_processing()
+compute_similarity_score(image, feature_extractor, transform)
+
+# %%
+image.thumbnails[0]
 # %%
 
 # TODO working here
@@ -161,37 +227,6 @@ def create_similarity_dataframe_gpu(base_dir, feature_extractor, transform):
 
     return pd.DataFrame(data)
 # %%
-
-def setup_image_processing():
-    """
-    Set up the image processing pipeline.
-    """
-    resnet = models.resnet50(
-        weights=models.ResNet50_Weights.IMAGENET1K_V1
-    )  # or DEFAULT
-    resnet.eval()
-    layers_to_keep = list(resnet.children())[:-1]
-    feature_extractor = torch.nn.Sequential(*layers_to_keep)
-
-    transform = transforms.Compose(
-        [
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
-            transforms.Grayscale(num_output_channels=3),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ]
-    )
-
-    transform_visualization = transforms.Compose(
-        [
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-        ]
-    )
-
-    return feature_extractor, transform, transform_visualization
 
 
 def extract_features(image, feature_extractor, transform):
