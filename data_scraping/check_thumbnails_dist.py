@@ -9,6 +9,8 @@ import torchvision.models as models
 import torchvision.transforms as transforms
 from torch.nn.functional import cosine_similarity
 from tqdm import tqdm
+from dataclasses import dataclass
+from typing import List
 
 
 # Define paths
@@ -19,26 +21,77 @@ thumbnails_dir = base_dir / "google_lens_search/thumbnails"
 annotations_dir = base_dir / "google_lens_search/annotations"
 
 
+@dataclass
+class ThumbnailData:
+    image: Image
+    thumbnail_number_id: int
+    label: str
+    score: float = None
+
+
+@dataclass
+class FocalImageData:
+    image: Image
+    thumbnails: List[ThumbnailData]
+    category_id: str
+    img_number_id: int
+
+
 def load_image(category, img_number):
     # add trailing zeros to img_number if necessary:
     file_path = list(base_dir.glob(f"dataset/raw/{category}/img{img_number:03}.png"))[0]
+    assert file_path.exists(), f"Image file not found: {file_path}"
     return Image.open(file_path)
 
 
-def load_thumbnails(category, img_number):
-    file_paths = list(thumbnails_dir.glob(f"results_{category}_{img_number:03}_*.png"))
-    return [Image.open(file_path) for file_path in sorted(file_paths)]
+def load_thumbnails(category, img_number, thumbnail_number_id):
+    file_path = (
+        thumbnails_dir
+        / f"results_{category}_{img_number:03}_{thumbnail_number_id:03}.png"
+    )
+    assert file_path.exists(), f"Thumbnail file not found: {file_path}"
+    return Image.open(file_path)
 
 
-def load_annotations(annotations_dir, focal_image_id):
+def load_annotations(annotations_dir, category_id, img_number_id):
     """
     Load annotations for a given focal image.
     """
-    annotation_file = annotations_dir / f"{focal_image_id}_annotations.json"
+    annotation_file = (
+        annotations_dir / f"{category_id}_{img_number_id:03}_annotations.json"
+    )
+    assert annotation_file.exists(), f"Annotation file not found: {annotation_file}"
     if annotation_file.exists():
         with open(annotation_file, "r") as f:
             return json.load(f)
     return None
+
+
+def load_focal_image_data(base_dir, category_id, img_number_id):
+    image = load_image(category_id, img_number_id)
+    annotations = load_annotations(annotations_dir, category_id, img_number_id)
+
+    thumbnails = []
+    # Sadly we used bad sorting for the file system to name thumbnails in annotations, not
+    # the right thumbnail_number_id.
+    all_thumbnail_files = list(
+        thumbnails_dir.glob(f"results_{category_id}_{img_number_id:03}_*.png")
+    )
+
+    print(all_thumbnail_files)
+    for label, thumbnail_file in zip(annotations.values(), all_thumbnail_files):
+        thumbnail_number_id = int(thumbnail_file.stem.split("_")[-1])
+        thumbnail_image = load_thumbnails(
+            category_id, img_number_id, thumbnail_number_id
+        )
+        thumbnail_data = ThumbnailData(thumbnail_image, thumbnail_number_id, label)
+        thumbnails.append(thumbnail_data)
+
+    return FocalImageData(image, thumbnails, category_id, img_number_id)
+
+
+load_focal_image_data(base_dir, "beautiful", 25)
+# %%
 
 
 def setup_image_processing():
@@ -204,22 +257,23 @@ def process_all_images():
 
 import pandas as pd
 
+
 def create_similarity_dataframe(base_dir, feature_extractor, transform):
     """
     Create a dataframe with similarity scores and true labels for all annotations.
     """
     annotations_dir = base_dir / "google_lens_search/annotations"
     annotation_files = list(annotations_dir.glob("*_annotations.json"))
-    
+
     feature_extractor, transform, _ = setup_image_processing()
-    
+
     data = []
     for annotation_file in tqdm(annotation_files):
         focal_image_id = annotation_file.stem.replace("_annotations", "")
         annotations = load_annotations(annotations_dir, focal_image_id)
         if annotations is None or len(annotations) == 0:
             continue
-        
+
         category, img_number = focal_image_id.split("_")[0], int(
             focal_image_id.split("_")[1]
         )
@@ -227,26 +281,32 @@ def create_similarity_dataframe(base_dir, feature_extractor, transform):
         focal_thumbnails = load_thumbnails(category, img_number)
         if focal_image is None or not focal_thumbnails:
             continue
-        
+
         focal_features = extract_features(focal_image, feature_extractor, transform)
-        
+
         for thumbnail, (thumb_id, label) in zip(focal_thumbnails, annotations.items()):
-            thumbnail_features = extract_features(thumbnail, feature_extractor, transform)
+            thumbnail_features = extract_features(
+                thumbnail, feature_extractor, transform
+            )
             similarity = cosine_similarity(
                 focal_features.unsqueeze(0), thumbnail_features.unsqueeze(0)
             ).item()
             # print(label)
-            data.append({
-                "focal_image_id": focal_image_id,
-                "similarity": similarity,
-                "true_label": label,  #annotation["label"],
-                "thumbnail_id": thumb_id,
-                # "thumbnail_url": annotation["thumbnail_url"]
-            })
-    
+            data.append(
+                {
+                    "focal_image_id": focal_image_id,
+                    "similarity": similarity,
+                    "true_label": label,  # annotation["label"],
+                    "thumbnail_id": thumb_id,
+                    # "thumbnail_url": annotation["thumbnail_url"]
+                }
+            )
+
     return pd.DataFrame(data)
 
+
 import torch
+
 
 def create_similarity_dataframe_gpu(base_dir, feature_extractor, transform):
     """
@@ -268,52 +328,62 @@ def create_similarity_dataframe_gpu(base_dir, feature_extractor, transform):
     """
     annotations_dir = base_dir / "google_lens_search/annotations"
     annotation_files = list(annotations_dir.glob("*_annotations.json"))
-    
+
     device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     feature_extractor.to(device)
     feature_extractor.eval()
-    
+
     data = []
     for annotation_file in tqdm(annotation_files):
         focal_image_id = annotation_file.stem.replace("_annotations", "")
         annotations = load_annotations(annotations_dir, focal_image_id)
         if annotations is None or len(annotations) == 0:
             continue
-        
-        category, img_number = focal_image_id.split("_")[0], int(focal_image_id.split("_")[1])
+
+        category, img_number = focal_image_id.split("_")[0], int(
+            focal_image_id.split("_")[1]
+        )
         focal_image = load_image(category, img_number)
         focal_thumbnails = load_thumbnails(category, img_number)
         if focal_image is None or not focal_thumbnails:
             continue
-        
+
         focal_tensor = transform(focal_image).unsqueeze(0).to(device)
         with torch.no_grad():
             focal_features = feature_extractor(focal_tensor).squeeze(0)
-        
-        thumbnail_tensors = torch.stack([transform(thumbnail) for thumbnail in focal_thumbnails]).to(device)
+
+        thumbnail_tensors = torch.stack(
+            [transform(thumbnail) for thumbnail in focal_thumbnails]
+        ).to(device)
         with torch.no_grad():
             thumbnail_features = feature_extractor(thumbnail_tensors)
-        
-        similarities = cosine_similarity(focal_features.unsqueeze(0), thumbnail_features)
+
+        similarities = cosine_similarity(
+            focal_features.unsqueeze(0), thumbnail_features
+        )
         similarities = similarities.cpu().numpy().flatten()
-        
+
         for (thumb_id, label), similarity in zip(annotations.items(), similarities):
-            data.append({
-                "focal_image_id": focal_image_id,
-                "similarity": similarity,
-                "true_label": label,
-                "thumbnail_id": thumb_id,
-            })
-    
+            data.append(
+                {
+                    "focal_image_id": focal_image_id,
+                    "similarity": similarity,
+                    "true_label": label,
+                    "thumbnail_id": thumb_id,
+                }
+            )
+
     return pd.DataFrame(data)
 
+
+process_all_images()
 
 # %%
 base_dir = Path("/Users/vigji/My Drive/eco-beauty")
 feature_extractor, transform, _ = setup_image_processing()
 
 df = create_similarity_dataframe_gpu(base_dir, feature_extractor, transform)
-df['true_label_int'] = df['true_label'].apply(lambda x: 1 if x == "same" else 0)
+df["true_label_int"] = df["true_label"].apply(lambda x: 1 if x == "same" else 0)
 # Save the dataframe to a CSV file
 output_dir = base_dir / "google_lens_search/analysis"
 output_dir.mkdir(parents=True, exist_ok=True)
@@ -324,7 +394,9 @@ print(f"Saved similarity scores to {output_dir / 'similarity_scores.csv'}")
 import seaborn as sns
 import matplotlib.pyplot as plt
 from sklearn.metrics import accuracy_score
-df['true_label_int'] = df['true_label'].apply(lambda x: 1 if x == "same" else 0)
+
+df["true_label_int"] = df["true_label"].apply(lambda x: 1 if x == "same" else 0)
+
 
 def find_best_threshold(df, min_accuracy=0.9):
     """
@@ -345,11 +417,13 @@ def find_best_threshold(df, min_accuracy=0.9):
         Accuracy achieved with the best threshold.
     """
     thresholds = np.arange(0, 1.01, 0.01)
-    predicted = (df['similarity'].values[:, np.newaxis] >= thresholds).astype(int)
+    predicted = (df["similarity"].values[:, np.newaxis] >= thresholds).astype(int)
     # predicted = predicted.apply(lambda x: "same" if x == 1 else "different", axis=1)
 
-    accuracies = np.apply_along_axis(accuracy_score, 0, df['true_label_int'].values[:, np.newaxis], predicted)
-    
+    accuracies = np.apply_along_axis(
+        accuracy_score, 0, df["true_label_int"].values[:, np.newaxis], predicted
+    )
+
     valid_thresholds = accuracies >= min_accuracy
     if np.any(valid_thresholds):
         best_index = np.argmax(accuracies * valid_thresholds)
@@ -367,7 +441,7 @@ plt.figure(figsize=(12, 6))
 
 # Subplot for 'same' distribution
 plt.subplot(1, 2, 1)
-sns.swarmplot(data=df, x='true_label', y='similarity', color='blue')
+sns.swarmplot(data=df, x="true_label", y="similarity", color="blue")
 plt.title("'Same' Distribution")
 plt.xlabel("True Label (1 = Same)")
 plt.ylabel("Similarity Score")
@@ -376,15 +450,15 @@ plt.ylabel("Similarity Score")
 plt.tight_layout()
 
 # Find best threshold
-#best_threshold, best_accuracy = find_best_threshold(df)
+# best_threshold, best_accuracy = find_best_threshold(df)
 
-#print(f"Best threshold: {best_threshold:.2f}")
-#print(f"Accuracy achieved: {best_accuracy:.2%}")
+# print(f"Best threshold: {best_threshold:.2f}")
+# print(f"Accuracy achieved: {best_accuracy:.2%}")
 
 # Add threshold line to both subplots
 for i in range(1, 3):
     plt.subplot(1, 2, i)
-    #plt.axhline(y=best_threshold, color='green', linestyle='--', label=f'Threshold ({best_threshold:.2f})')
+    # plt.axhline(y=best_threshold, color='green', linestyle='--', label=f'Threshold ({best_threshold:.2f})')
     plt.legend()
 
 plt.show()
