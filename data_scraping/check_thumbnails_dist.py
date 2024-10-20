@@ -4,6 +4,7 @@ from PIL import Image, ImageDraw
 import matplotlib.pyplot as plt
 import json
 import torch
+import pandas as pd
 import numpy as np
 import torchvision.models as models
 import torchvision.transforms as transforms
@@ -47,7 +48,7 @@ def load_image(category, img_number):
 def load_thumbnails(category, img_number, thumbnail_number_id):
     file_path = (
         thumbnails_dir
-        / f"results_{category}_{img_number:03}_{thumbnail_number_id:03}.png"
+        / f"results_{category}_{img_number}_{thumbnail_number_id:03}.png"
     )
     assert file_path.exists(), f"Thumbnail file not found: {file_path}"
     return Image.open(file_path)
@@ -67,7 +68,7 @@ def load_annotations(annotations_dir, category_id, img_number_id):
     return None
 
 
-def load_focal_image_data(base_dir, category_id, img_number_id):
+def load_focal_image_data(base_dir, category_id: str, img_number_id: str):
     image = load_image(category_id, img_number_id)
     annotations = load_annotations(annotations_dir, category_id, img_number_id)
 
@@ -75,10 +76,13 @@ def load_focal_image_data(base_dir, category_id, img_number_id):
     # Sadly we used bad sorting for the file system to name thumbnails in annotations, not
     # the right thumbnail_number_id.
     all_thumbnail_files = list(
-        thumbnails_dir.glob(f"results_{category_id}_{img_number_id:03}_*.png")
+        thumbnails_dir.glob(f"results_{category_id}_{img_number_id}_*.png")
     )
+    if len(all_thumbnail_files) == 0:
+        print(f"No thumbnails found for {category_id}_{img_number_id}")
+        return None
 
-    print(all_thumbnail_files)
+    # print(all_thumbnail_files)
     for label, thumbnail_file in zip(annotations.values(), all_thumbnail_files):
         thumbnail_number_id = int(thumbnail_file.stem.split("_")[-1])
         thumbnail_image = load_thumbnails(
@@ -89,8 +93,20 @@ def load_focal_image_data(base_dir, category_id, img_number_id):
 
     return FocalImageData(image, thumbnails, category_id, img_number_id)
 
+def load_all_focal_image_data(base_dir):
+    all_focal_image_data = []
+    for category_id in ["beautiful", "ugly"]:
+        annotation_files = list(annotations_dir.glob(f"{category_id}_*.json"))
+        for annotation_file in tqdm(annotation_files):
+            # print(annotation_file.stem)
+            category_id, img_number_id = annotation_file.stem.split("_")[:2]
+            focal_image_data = load_focal_image_data(base_dir, category_id, img_number_id)
+            if focal_image_data is not None:
+                all_focal_image_data.append(focal_image_data)
+    return all_focal_image_data
 
-image = load_focal_image_data(base_dir, "beautiful", 25)
+image = load_focal_image_data(base_dir, "beautiful", "025")
+all_imgs = load_all_focal_image_data(base_dir)
 # %%
 
 def setup_image_processing():
@@ -153,79 +169,28 @@ def compute_similarity_score(image_data: FocalImageData, feature_extractor, tran
 
 
 feature_extractor, transform, transform_visualization = setup_image_processing()
-compute_similarity_score(image, feature_extractor, transform)
+for img in tqdm(all_imgs):
+    compute_similarity_score(img, feature_extractor, transform)
 
-# %%
-image.thumbnails[0]
-# %%
 
-# TODO working here
-def create_similarity_dataframe_gpu(base_dir, feature_extractor, transform):
-    """
-    Create a dataframe with similarity scores and true labels for all annotations using GPU acceleration.
-
-    Parameters
-    ----------
-    base_dir : pathlib.Path
-        The base directory containing the dataset and annotations.
-    feature_extractor : torch.nn.Module
-        The feature extractor model.
-    transform : torchvision.transforms.Compose
-        The transformation pipeline for the images.
-
-    Returns
-    -------
-    pandas.DataFrame
-        A dataframe containing focal image IDs, similarity scores, true labels, and thumbnail IDs.
-    """
-    annotations_dir = base_dir / "google_lens_search/annotations"
-    annotation_files = list(annotations_dir.glob("*_annotations.json"))
-
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-    feature_extractor.to(device)
-    feature_extractor.eval()
-
+def create_similarity_dataframe(all_imgs):
     data = []
-    for annotation_file in tqdm(annotation_files):
-        focal_image_id = annotation_file.stem.replace("_annotations", "")
-        annotations = load_annotations(annotations_dir, focal_image_id)
-        if annotations is None or len(annotations) == 0:
-            continue
-
-        category, img_number = focal_image_id.split("_")[0], int(
-            focal_image_id.split("_")[1]
-        )
-        focal_image = load_image(category, img_number)
-        focal_thumbnails = load_thumbnails(category, img_number)
-        if focal_image is None or not focal_thumbnails:
-            continue
-
-        focal_tensor = transform(focal_image).unsqueeze(0).to(device)
-        with torch.no_grad():
-            focal_features = feature_extractor(focal_tensor).squeeze(0)
-
-        thumbnail_tensors = torch.stack(
-            [transform(thumbnail) for thumbnail in focal_thumbnails]
-        ).to(device)
-        with torch.no_grad():
-            thumbnail_features = feature_extractor(thumbnail_tensors)
-
-        similarities = cosine_similarity(
-            focal_features.unsqueeze(0), thumbnail_features
-        )
-        similarities = similarities.cpu().numpy().flatten()
-
-        for (thumb_id, label), similarity in zip(annotations.items(), similarities):
+    for img in tqdm(all_imgs):
+        for thumbnail in img.thumbnails:
             data.append(
                 {
-                    "focal_image_id": focal_image_id,
-                    "similarity": similarity,
-                    "true_label": label,
-                    "thumbnail_id": thumb_id,
+                    "focal_image_id": img.img_number_id,
+                    "similarity": thumbnail.score,
+                    "true_label": thumbnail.label,
+                    "thumbnail_id": thumbnail.thumbnail_number_id,
                 }
             )
 
     return pd.DataFrame(data)
+
+df = create_similarity_dataframe(all_imgs)
+# %%
+df
 # %%
 
 
