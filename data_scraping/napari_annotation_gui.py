@@ -24,8 +24,9 @@ def load_thumbnails(category, img_number):
 
 
 def annotate_images(focal_image_id):
-    category, img_number = focal_image_id.split("_")[0], int(
-        focal_image_id.split("_")[1]
+    category, img_number = (
+        focal_image_id.split("_")[0],
+        int(focal_image_id.split("_")[1]),
     )
     focal_image = load_image(category, img_number)
     thumbnails = load_thumbnails(category, img_number)

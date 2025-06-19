@@ -142,7 +142,6 @@ def setup_image_processing():
 
 
 def compute_similarity_score(image_data: FocalImageData, feature_extractor, transform):
-
     device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     feature_extractor.to(device)
     feature_extractor.eval()
